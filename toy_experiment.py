@@ -7,7 +7,7 @@ import random
 import os
 import logging
 import torch.optim as optim
-from tensorboardX import SummaryWriter
+# from tensorboardX import SummaryWriter
 from collections import Counter
 
 from models.boosted_vae import BoostedVAE
@@ -72,7 +72,7 @@ parser.add_argument('--log_interval', type=int, default=1000,
 parser.add_argument('--plot_interval', type=int, default=1000,
                     help='how many batches to wait before creating reconstruction plots. Set to <0 to turn off.')
 parser.add_argument('--no_tensorboard', dest="tensorboard", action="store_false", help='Turns off saving results to tensorboard.')
-parser.set_defaults(tensorboard=True)
+parser.set_defaults(tensorboard=False)
 
 parser.add_argument('--out_dir', type=str, default='./results/snapshots', help='Output directory for model snapshots etc.')
 parser.add_argument('--data_dir', type=str, default='./data/raw/', help="Where raw data is saved.")
@@ -84,7 +84,7 @@ sr = parser.add_mutually_exclusive_group(required=False)
 sr.add_argument('--save_results', action='store_true', dest='save_results', help='Save results from experiments.')
 sr.add_argument('--discard_results', action='store_false', dest='save_results', help='Do NOT save results from experiments.')
 parser.set_defaults(save_results=True)
-parser.add_argument('--plot_resolution', type=int, default=250, help='how many points to plot, higher gives better resolution')
+parser.add_argument('--plot_resolution', type=int, default=256, help='how many points to plot, higher gives better resolution')
 
 # optimization settings
 parser.add_argument('--num_steps', type=int, default=100000, help='number of training steps to take (default: 100000)')

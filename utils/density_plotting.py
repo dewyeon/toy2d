@@ -1,14 +1,43 @@
 import torch
 import os
 import numpy as np
-
+import math
+from einops import rearrange
 import logging
 logger = logging.getLogger(__name__)
 
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+_GCONST_ = -0.9189385332046727 # ln(sqrt(2*pi))
 
+def get_logp_z(z):
+    # import pdb; pdb.set_trace()
+    C = 2
+    logp = C * _GCONST_ - 0.5*torch.sum(z**2, 1)
+    # logp = - C * 0.5 * math.log(math.pi * 2) - 0.5*torch.sum(z**2, 1) + logdet_J
+    return logp
+
+def positionalencoding2d(D, H, W):
+    """
+    :param D: dimension of the model
+    :param H: H of the positions
+    :param W: W of the positions
+    :return: DxHxW position matrix
+    """
+    if D % 4 != 0:
+        raise ValueError("Cannot use sin/cos positional encoding with odd dimension (got dim={:d})".format(D))
+    P = torch.zeros(D, H, W)
+    # Each dimension use half of D
+    D = D // 2
+    div_term = torch.exp(torch.arange(0.0, D, 2) * -(math.log(1e4) / D))
+    pos_w = torch.arange(0.0, W).unsqueeze(1)
+    pos_h = torch.arange(0.0, H).unsqueeze(1)
+    P[0:D:2, :, :]  = torch.sin(pos_w * div_term).transpose(0, 1).unsqueeze(1).repeat(1, H, 1)
+    P[1:D:2, :, :]  = torch.cos(pos_w * div_term).transpose(0, 1).unsqueeze(1).repeat(1, H, 1)
+    P[D::2,  :, :]  = torch.sin(pos_h * div_term).transpose(0, 1).unsqueeze(2).repeat(1, 1, W)
+    P[D+1::2,:, :]  = torch.cos(pos_h * div_term).transpose(0, 1).unsqueeze(2).repeat(1, 1, W)
+    return P
 
 @torch.no_grad()
 def plot(batch_id, model, potential_or_sampling_fn, args):
@@ -56,7 +85,7 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
     #plt.tight_layout(rect=[0, 0, 1.0, 0.95])
     plt.tight_layout()
 
-    title = f'{args.dataset.title()}: {args.flow.title()} Flow, K={args.num_flows}'
+    title = f'{args.dataset.title()}: {args.flow.title()} Flow, K={args.K_steps}'
     title += f', C={args.num_components}' if args.flow == "boosted" else ''
     title += f', Reg={args.regularization_rate:.2f}' if args.flow == "boosted" and args.density_matching else ''
     annealing_type = f', Annealed' if args.min_beta < 1.0 else ', No Annealing'
@@ -65,9 +94,9 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
     fig.subplots_adjust(top=0.85)
 
     # save
-    fname = f'{args.dataset}_{args.flow}_K{args.num_flows}_bs{args.batch_size}'
+    fname = f'{args.dataset}_{args.flow}_K{args.K_steps}_bs{args.batch_size}'
     fname += f'_C{args.num_components}_reg{int(100*args.regularization_rate):d}_{args.component_type}' if args.flow == 'boosted' else ''
-    fname += f'_{args.coupling_network}{args.coupling_network_depth}_hsize{args.h_size}' if args.component_type == 'realnvp' or args.flow == 'realnvp' else ''
+    fname += f'_{args.coupling_network}{args.coupling_network_depth}_hsize{args.h_size}' if args.flow == 'realnvp' else ''
     fname += f'_hidden{args.coupling_network_depth}_hsize{args.h_size}' if args.flow == 'iaf' else ''
     fname += '_annealed' if args.min_beta < 1.0 else ''
     fname += '_lr_scheduling' if not args.no_lr_schedule else ''
@@ -165,15 +194,27 @@ def plot_fwd_flow_density(model, ax, test_grid, n_pts, batch_size, args):
     
     # compute posterior approx density
     zzk, logdet = [], []
-    import pdb; pdb.set_trace()
-    for zz_i in zz.split(batch_size, dim=0):        
+    B = batch_size
+    H=1; W=1
+    P = args.condition_vec
+    pos = positionalencoding2d(P, H, W)
+    cond_list = []
+    for layer in range(args.L_layers):
+        res = torch.zeros(args.L_layers, H, W)
+        res[layer] = 1
+        cond = torch.cat((pos, res), dim=0).to(args.device).unsqueeze(0).repeat(B // args.L_layers, 1, 1, 1)
+        cond_list.append(cond)
+    #### L=2일때 수정해야함!!!!!!!!
+    c_r = rearrange(cond, 'b c h w -> (b h w) c')
+
+    for zz_i in zz.split(batch_size, dim=0):    
         #zzk_i, logdet_i = model.flow(zz_i)
         zzk_i, logdet_i = model(zz_i, [c_r,])
         zzk += [zzk_i]
         logdet += [logdet_i]
         
     zzk, logdet = torch.cat(zzk, 0), torch.cat(logdet, 0)
-    q_log_prob = model.base_dist.log_prob(zzk).sum(1)
+    q_log_prob = get_logp_z(zzk) / 2
     log_prob = q_log_prob + logdet
     prob = log_prob.exp().cpu()
 

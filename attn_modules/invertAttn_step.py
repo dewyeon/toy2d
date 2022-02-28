@@ -145,11 +145,11 @@ class InvertISDP(nn.Module):
     def forward(self, inputs, cond_vec, logdet=0, reverse=False, permute=False):
         if not reverse:
             inp = rearrange(inputs, '(b h w) c -> b (h w) c', h=self.H, w=self.W) 
-            
             ####### Split ####### H=14, W=14, C=768 / HW=196 <= C/n=384 : n=2
             y_tilde, x_tilde = torch.split(inp, self.d_split, dim=-1) # y-identity, x-transformation [32, HW196, ch//n]
             DC = torch.ones(y_tilde.shape[0], y_tilde.shape[1], 1).to(self.cfg.device)
             cond_vec = rearrange(cond_vec, '(b hw) d -> b hw d', b=y_tilde.shape[0])
+        
             y = torch.cat((y_tilde, cond_vec, DC), dim=-1) # [1, 15, 6]
 
 
