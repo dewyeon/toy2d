@@ -1,7 +1,7 @@
 import math
 import torch
 from torch import nn
-from custom_models import *
+from baselines.cflow_ad.custom_models import *
 # FrEIA (https://github.com/VLL-HD/FrEIA/)
 import FrEIA.framework as Ff
 import FrEIA.modules as Fm

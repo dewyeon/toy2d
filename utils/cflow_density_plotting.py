@@ -85,7 +85,7 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
     #plt.tight_layout(rect=[0, 0, 1.0, 0.95])
     plt.tight_layout()
 
-    title = f'{args.dataset.title()}: {args.flow.title()} Flow, K={args.K_steps}'
+    title = f'{args.dataset.title()}: {args.flow.title()} Flow, cb={args.coupling_blocks}'
     title += f', C={args.num_components}' if args.flow == "boosted" else ''
     title += f', Reg={args.regularization_rate:.2f}' if args.flow == "boosted" and args.density_matching else ''
     annealing_type = f', Annealed' if args.min_beta < 1.0 else ', No Annealing'
@@ -94,7 +94,7 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
     fig.subplots_adjust(top=0.85)
 
     # save
-    fname = f'{args.dataset}_{args.flow}_K{args.K_steps}_bs{args.batch_size}'
+    fname = f'{args.dataset}_{args.flow}_cb{args.coupling_blocks}_bs{args.batch_size}'
     fname += f'_C{args.num_components}_reg{int(100*args.regularization_rate):d}_{args.component_type}' if args.flow == 'boosted' else ''
     fname += f'_{args.coupling_network}{args.coupling_network_depth}_hsize{args.h_size}' if args.flow == 'realnvp' else ''
     fname += f'_hidden{args.coupling_network_depth}_hsize{args.h_size}' if args.flow == 'iaf' else ''
@@ -131,7 +131,7 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
         for ax in plt.gcf().axes: format_ax(ax, range_lim)
         #plt.tight_layout(rect=[0, 0, 1.0, 0.95])
         plt.tight_layout()
-        title = f'{args.dataset.title()}: {args.flow.title()} Flow, K={args.K_step}'
+        title = f'{args.dataset.title()}: {args.flow.title()} Flow, cb={args.coupling_blocks}'
         title += f', Annealed' if args.min_beta < 1.0 else ', No Annealing'
         title += f', C={args.num_components}, Reg={args.regularization_rate:.2f}' if args.flow == "boosted" else ''
         fig.suptitle(title, y=0.98, fontsize=20)
@@ -197,15 +197,8 @@ def plot_fwd_flow_density(model, ax, test_grid, n_pts, batch_size, args):
     B = batch_size
     H=1; W=1
     P = args.condition_vec
-    pos = positionalencoding2d(P, H, W)
-    cond_list = []
-    for layer in range(args.L_layers):
-        res = torch.zeros(args.L_layers, H, W)
-        res[layer] = 1
-        cond = torch.cat((pos, res), dim=0).to(args.device).unsqueeze(0).repeat(B // args.L_layers, 1, 1, 1)
-        cond_list.append(cond)
-    #### L=2일때 수정해야함!!!!!!!!
-    c_r = rearrange(cond, 'b c h w -> (b h w) c')
+    pos = positionalencoding2d(P, H, W).to(args.device).unsqueeze(0).repeat(B, 1, 1, 1)
+    c_r = rearrange(pos, 'b c h w -> (b h w) c')
 
     for zz_i in zz.split(batch_size, dim=0):    
         #zzk_i, logdet_i = model.flow(zz_i)
@@ -300,7 +293,7 @@ def plot_inv_flow_density(model, ax, test_grid, n_pts, batch_size, args):
 
     
 def plot_inv_flow(model, batch_id, n_pts, batch_size, args):
-    fname = f'{args.dataset}_{args.flow}_K{args.num_flows}_bs{args.batch_size}'
+    fname = f'{args.dataset}_{args.flow}_cb{args.coupling_blocks}_bs{args.batch_size}'
     fname += f'_{args.coupling_network}{args.coupling_network_depth}_hsize{args.h_size}' if args.component_type == 'realnvp' or args.flow == 'realnvp' else ''
     fname += f'_hidden{args.coupling_network_depth}_hsize{args.h_size}' if args.flow == 'iaf' else ''
     fname += '_annealed' if args.min_beta < 1.0 else ''
