@@ -24,4 +24,5 @@ results/msi
 scripts/test*
 scripts/archive
 *~
+wandb/
 #*#
