@@ -17,7 +17,7 @@ img_dims = [3] + list(img_size)
 norm_mean, norm_std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
 
 # network hyperparameters
-n_scales = 3  # number of scales at which features are extracted, img_size is the highest - others are //2, //4,...
+n_scales = 1  # number of scales at which features are extracted, img_size is the highest - others are //2, //4,...
 clamp = 3  # clamping parameter
 max_grad_norm = 1e0  # clamp gradients to this norm
 n_coupling_blocks = 4  # higher = more flexible = more unstable

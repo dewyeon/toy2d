@@ -5,8 +5,8 @@ import torch.nn as nn
 from torch.autograd import Variable
 from math import exp
 import numpy as np
-import config as c
-from utils import *
+import baselines.csflow.config as c
+from baselines.csflow.utils import *
 
 VERBOSE = False
 
@@ -186,10 +186,10 @@ class parallel_glow_coupling_layer(nn.Module):
     def forward(self, x, rev=False):
         x01, x02 = (x[0].narrow(1, 0, self.split_len1),
                     x[0].narrow(1, self.split_len1, self.split_len2))
-        x11, x12 = (x[1].narrow(1, 0, self.split_len1),
-                    x[1].narrow(1, self.split_len1, self.split_len2))
-        x21, x22 = (x[2].narrow(1, 0, self.split_len1),
-                    x[2].narrow(1, self.split_len1, self.split_len2))
+        # x11, x12 = (x[1].narrow(1, 0, self.split_len1),
+        #             x[1].narrow(1, self.split_len1, self.split_len2))
+        # x21, x22 = (x[2].narrow(1, 0, self.split_len1),
+        #             x[2].narrow(1, self.split_len1, self.split_len2))
 
         if not rev:
             r02, r12, r22 = self.s2(x02, x12, x22)

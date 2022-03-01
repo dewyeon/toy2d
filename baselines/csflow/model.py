@@ -4,36 +4,51 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from efficientnet_pytorch import EfficientNet
-import config as c
-from freia_funcs import *
+import baselines.csflow.config as c
+from baselines.csflow.freia_funcs import *
 
 WEIGHT_DIR = './weights'
 MODEL_DIR = './models/tmp'
 
 
 def get_cs_flow_model(input_dim=c.n_feat):
+    # nodes = list()
+    # nodes.append(InputNode(input_dim, c.map_size[0], c.map_size[1], name='input'))
+    # nodes.append(InputNode(input_dim, c.map_size[0] // 2, c.map_size[1] // 2, name='input2'))
+    # nodes.append(InputNode(input_dim, c.map_size[0] // 4, c.map_size[1] // 4, name='input3'))
+
+    # for k in range(c.n_coupling_blocks):
+    #     if k == 0:
+    #         node_to_permute = [nodes[-3].out0, nodes[-2].out0, nodes[-1].out0]
+    #     else:
+    #         node_to_permute = [nodes[-1].out0, nodes[-1].out1, nodes[-1].out2]
+
+    #     nodes.append(Node(node_to_permute, ParallelPermute, {'seed': k}, name=F'permute_{k}'))
+    #     nodes.append(Node([nodes[-1].out0, nodes[-1].out1, nodes[-1].out2], parallel_glow_coupling_layer,
+    #                       {'clamp': c.clamp, 'F_class': CrossConvolutions,
+    #                        'F_args': {'channels_hidden': c.fc_internal,
+    #                                   'kernel_size': c.kernel_sizes[k], 'block_no': k}},
+    #                       name=F'fc1_{k}'))
+
+    # nodes.append(OutputNode([nodes[-1].out0], name='output_end0'))
+    # nodes.append(OutputNode([nodes[-2].out1], name='output_end1'))
+    # nodes.append(OutputNode([nodes[-3].out2], name='output_end2'))
+    # nf = ReversibleGraphNet(nodes, n_jac=3)
     nodes = list()
     nodes.append(InputNode(input_dim, c.map_size[0], c.map_size[1], name='input'))
-    nodes.append(InputNode(input_dim, c.map_size[0] // 2, c.map_size[1] // 2, name='input2'))
-    nodes.append(InputNode(input_dim, c.map_size[0] // 4, c.map_size[1] // 4, name='input3'))
 
     for k in range(c.n_coupling_blocks):
-        if k == 0:
-            node_to_permute = [nodes[-3].out0, nodes[-2].out0, nodes[-1].out0]
-        else:
-            node_to_permute = [nodes[-1].out0, nodes[-1].out1, nodes[-1].out2]
+        node_to_permute = [nodes[-1].out0]
 
         nodes.append(Node(node_to_permute, ParallelPermute, {'seed': k}, name=F'permute_{k}'))
-        nodes.append(Node([nodes[-1].out0, nodes[-1].out1, nodes[-1].out2], parallel_glow_coupling_layer,
+        nodes.append(Node([nodes[-1].out0], parallel_glow_coupling_layer,
                           {'clamp': c.clamp, 'F_class': CrossConvolutions,
                            'F_args': {'channels_hidden': c.fc_internal,
                                       'kernel_size': c.kernel_sizes[k], 'block_no': k}},
                           name=F'fc1_{k}'))
 
     nodes.append(OutputNode([nodes[-1].out0], name='output_end0'))
-    nodes.append(OutputNode([nodes[-2].out1], name='output_end1'))
-    nodes.append(OutputNode([nodes[-3].out2], name='output_end2'))
-    nf = ReversibleGraphNet(nodes, n_jac=3)
+    nf = ReversibleGraphNet(nodes, n_jac=1)
     return nf
 
 def nf_forward(model, inputs):

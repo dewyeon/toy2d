@@ -1,7 +1,7 @@
 import os
 import torch
 from torchvision import datasets, transforms
-import config as c
+import baselines.csflow.config as c
 from torchvision.datasets import ImageFolder
 from torch.utils.data import Dataset
 import numpy as np
