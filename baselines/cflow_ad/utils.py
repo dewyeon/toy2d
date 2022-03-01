@@ -39,6 +39,12 @@ def get_logp(C, z, logdet_J):
     logp = C * _GCONST_ - 0.5*torch.sum(z**2, 1) + logdet_J
     return logp
 
+def get_logp_z(z):
+    # import pdb; pdb.set_trace()
+    C = 2
+    logp = C * _GCONST_ - 0.5*torch.sum(z**2, 1)
+    # logp = - C * 0.5 * math.log(math.pi * 2) - 0.5*torch.sum(z**2, 1) + logdet_J
+    return logp
 
 def rescale(x):
     return (x - x.min()) / (x.max() - x.min())

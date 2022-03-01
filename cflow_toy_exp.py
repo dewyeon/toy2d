@@ -10,24 +10,15 @@ import torch.optim as optim
 # from tensorboardX import SummaryWriter
 from collections import Counter
 
-from models.boosted_vae import BoostedVAE
-from models.boosted_flow import BoostedFlow
-from models.realnvp import RealNVPFlow
-from models.iaf import IAFFlow
-from models.planar import PlanarFlow
-from models.radial import RadialFlow
-from models.liniaf import LinIAFFlow
-from models.affine import AffineFlow
-from models.nlsq import NLSqFlow
-from model import load_decoder_arch, positionalencoding2d, activation
+from baselines.cflow_ad.model import load_decoder_arch, positionalencoding2d, activation
 
-from utils.density_plotting import plot
+from utils.cflow_density_plotting import plot
 from utils.load_data import make_toy_density, make_toy_sampler
 from utils.utilities import init_log, softmax
 from optimization.optimizers import GradualWarmupScheduler
 from utils.distributions import log_normal_diag, log_normal_standard, log_normal_normalized
 from einops import rearrange 
-from our_utils import *
+from baselines.cflow_ad.utils import *
 
 def init_seeds(seed=0):
     random.seed(seed)
@@ -105,75 +96,11 @@ parser.add_argument("--max_grad_norm", type=float, default=10.0, help="Max norm 
 parser.add_argument("--warmup_iters", type=int, default=0, help="Use this number of iterations to warmup learning rate linearly from zero to learning rate")
 
 # flow parameters
-parser.add_argument('--flow', type=str, default='ours',
+parser.add_argument('--flow', type=str, default='cflow',
                     choices=['planar', 'radial', 'liniaf', 'affine', 'nlsq', 'boosted', 'iaf', 'realnvp'],
                     help="""Type of flows to use, no flows can also be selected""")
-parser.add_argument('--A', '-A', default='mat', type=str)
-parser.add_argument('--loss', '-loss', default='ours', type=str, help='loss options: ours / csflow')
-parser.add_argument('--checkpoint', default='', type=str, metavar='D',
-                    help='file with saved checkpoint')
-parser.add_argument('-user', '--user', default='sojin', type=str, help='username: sojin/juyeon/chi (default: mvtec)')
-parser.add_argument('--is_attention', default=True, type=bool)
-parser.add_argument('--is_inverse', default=False, type=bool)
-parser.add_argument('--deep_subnet', default=False, type=bool)
-parser.add_argument('--multihead_isdp', default=False, type=bool)
-parser.add_argument('--n_head', default=4, type=int) # dim = 768 // 4
-parser.add_argument('--grid_layer', default=6, type=int) # 0 ~ 11
-
-parser.add_argument('--condition_vec', default=128, type=int) 
-parser.add_argument('--eps', type=float, default=1e-5) # stepLR gamma
-
-parser.add_argument('--enc_layer', default='3layer', type=str) # 1layer- default ,  3layer - cflow
-
-parser.add_argument('-tv','--trans_ver', default='0', type=str) # 0 (default), 1,2,3
-parser.add_argument('-bv','--block_ver', default='cs2-5', type=str) # 0 (default), 1,2,3
-
-parser.add_argument('--w_identity', default=True, type=bool)
-parser.add_argument('--attn_step', default=1, type=int) # 1, 2, 3, 4 
-
-### scheduling
-parser.add_argument('--lr_decay', default=True, type=bool) 
-parser.add_argument('--lr_decay_rate', default=0.8, type=float)
-# parser.add_argument('--weight_decay', default=5e-5, type=float) # 1e-5, 5e-5
-parser.add_argument('--lr_warm', default=True, type=bool) 
-parser.add_argument('-warm_up', '--lr_warm_epochs', default=2, type=int) 
-parser.add_argument('-warm_adj', '--warm_up_adj', default=10, type=int) 
-parser.add_argument('--lr_cosine', default=True, type=bool)
-parser.add_argument('--momentum', default=0, type=float) # 1e-5, 5e-5
-parser.add_argument('--rms_alpha', default=0.99, type=float) 
-
-parser.add_argument('-reg', '--regularizer', default='False', type=str) # cflow-adam, sgd
-parser.add_argument('-alp', '--alpha', default=1.0, type=float)  # regularizer temperature
-parser.add_argument('--sa_scale1', default=10, type=int)
-parser.add_argument('--sa_scale2', default=10, type=int)
-
-parser.add_argument('-opt', '--optimizer', default='cflow-adam', type=str) # cflow-adam, sgd
-parser.add_argument('-sch', '--scheduler', default='StepLR', type=str) # LambdaLR, MultiplicativeLR,
-parser.add_argument('--step_size', type=int, default=5) # stepLR step size
-parser.add_argument('--gamma', type=float, default=0.9) # stepLR gamma
-parser.add_argument('--lr', type=float, default=1e-4, metavar='LR', help='learning rate (default: 2e-4)') # 1e-3 = 0.0001
-
-parser.add_argument('--split_dim', default=2, type=int) # dim = 768 // splitdim -> substitute checkerboard
-parser.add_argument('--lamb', default=1, type=float) # 1, 10, 100, 1000, 10000, 100000
-
-parser.add_argument('-use_wandb', '--use_wandb', default=True, type=bool)
-parser.add_argument('-wdb_pj', '--wandb_project', default='newLoss_multi-resolution', type=str)
-parser.add_argument('-wdb', '--wandb_table', default='mvtec', type=str)
-parser.add_argument('-enc', '--enc-arch', default='vit_base_patch16_224', type=str, metavar='A',
-                    help='feature extractor: wide_resnet50_2/resnet18/mobilenet_v3_large (default: wide_resnet50_2)')
-parser.add_argument('-dec', '--dec-arch', default='invertible-attention', type=str, metavar='A',
-                    help='normalizing flow model (default: ,invertible-attention-resolution(resolution-wise cross attention),invertible-attention(now), freia-invertible(magic), freia-cflow)')         
-parser.add_argument('-act_norm_sc', '--actnorm_scale', default=1.0, type=float,
-                    help='activation normalization scale (default: 1.0)')
-parser.add_argument('--LU_decomposed', default=True, type=bool,
-                    help='LU decompose in invertible 1x1 conv')
-parser.add_argument('-K', '--K_steps', default=1, type=int, metavar='L',
-                    help='number of layers used in NF model (default: 3)')
-parser.add_argument('-L', '--L_layers', default=1, type=int, metavar='L',
-                    help='number of layers used in NF model (default: 3)')
-parser.add_argument('-hid_ch', '--hidden_channels', default=256, type=int, # not used. invertible_moduel/
-                    help='number of hidden channels used in NF model (default: 512)')
-
+parser.add_argument('-dec', '--dec-arch', default='freia-cflow', type=str, metavar='A',
+                    help='normalizing flow model (default: freia-cflow)')
 parser.add_argument('-pl', '--pool-layers', default=3, type=int, metavar='L',
                     help='number of layers used in NF model (default: 3)')
 parser.add_argument('-cb', '--coupling-blocks', default=8, type=int, metavar='L',
@@ -182,8 +109,30 @@ parser.add_argument('-run', '--run-name', default=0, type=int, metavar='C',
                     help='name of the run (default: 0)')
 parser.add_argument('-inp', '--input-size', default=256, type=int, metavar='C',
                     help='image resize dimensions (default: 256)')
-parser.add_argument("--action-type", default='toy-2d', type=str, metavar='T',
-                    help='norm-train/norm-test/toy-example (default: norm-train)')
+parser.add_argument("--action-type", default='norm-train', type=str, metavar='T',
+                    help='norm-train/norm-test (default: norm-train)')
+parser.add_argument('-bs', '--batch-size', default=32, type=int, metavar='B',
+                    help='train batch size (default: 32)')
+parser.add_argument('--lr', type=float, default=2e-4, metavar='LR',
+                    help='learning rate (default: 2e-4)')
+parser.add_argument('--meta-epochs', type=int, default=25, metavar='N',
+                    help='number of meta epochs to train (default: 25)')
+parser.add_argument('--sub-epochs', type=int, default=8, metavar='N',
+                    help='number of sub epochs to train (default: 8)')
+parser.add_argument('--condition_vec', type=int, default=128, metavar='N',
+                    help='positional encoding dim (condition vector) (default: 128)')
+parser.add_argument('--pro', action='store_true', default=False,
+                    help='enables estimation of AUPRO metric')
+parser.add_argument('--viz', action='store_true', default=False,
+                    help='saves test data visualizations')
+parser.add_argument('--workers', default=4, type=int, metavar='G',
+                    help='number of data loading workers (default: 4)')
+parser.add_argument("--gpu", default='0', type=str, metavar='G',
+                    help='GPU device number')
+parser.add_argument('--no-cuda', action='store_true', default=False,
+                    help='disables CUDA training')
+parser.add_argument('--video-path', default='.', type=str, metavar='D',
+                    help='video file path')
 
 parser.add_argument('--toy_H', default=1, type=int)
 parser.add_argument('--toy_W', default=1, type=int)
@@ -244,7 +193,7 @@ def parse_args(main_args=None):
 
     args.boosted = args.flow == "boosted"
     if args.flow != 'no_flow':
-        args.snap_dir += 'K' + str(args.K_steps)
+        args.snap_dir += 'cb' + str(args.coupling_blocks)
 
     if args.flow in ['boosted', 'bagged']:
         if args.regularization_rate < 0.0:
@@ -293,26 +242,7 @@ def parse_args(main_args=None):
 
 
 def init_model(args):
-    if args.flow == 'boosted':
-        if args.density_matching:
-            model = BoostedVAE(args).to(args.device)
-        else:
-            model = BoostedFlow(args).to(args.device)
-    elif args.flow == 'planar':
-        model = PlanarFlow(args).to(args.device)
-    elif args.flow == 'radial':
-        model = RadialFlow(args).to(args.device)
-    elif args.flow == 'liniaf':
-        model = LinIAFFlow(args).to(args.device)
-    elif args.flow == 'affine':
-        model = AffineFlow(args).to(args.device)
-    elif args.flow == 'nlsq':
-        model = NLSqFlow(args).to(args.device)
-    elif args.flow == 'iaf':
-        model = IAFFlow(args).to(args.device)
-    elif args.flow == "realnvp":
-        model = RealNVPFlow(args).to(args.device)
-    elif args.flow == 'ours':
+    if args.flow == 'cflow':
         args.clamp_alpha = 1.9
         model = load_decoder_arch(args, 2)
     else:
@@ -489,14 +419,8 @@ def compute_kl_pq_loss(model, data_or_sampler, beta, args):
     B, C, H, W = x.size()
     P = args.condition_vec
     pos = positionalencoding2d(P, H, W)
-    cond_list = []
-    for layer in range(args.L_layers):
-        res = torch.zeros(args.L_layers, H, W)
-        res[layer] = 1
-        cond = torch.cat((pos, res), dim=0).to(args.device).unsqueeze(0).repeat(B // args.L_layers, 1, 1, 1)
-        cond_list.append(cond)
-    #### L=2일때 수정해야함!!!!!!!!
-    c_r = rearrange(cond, 'b c h w -> (b h w) c')
+    pos = pos.to(args.device).unsqueeze(0).repeat(B, 1, 1, 1)
+    c_r = rearrange(pos, 'b c h w -> (b h w) c')
     x = rearrange(x, 'b c h w -> (b h w) c').to(args.device)
     model = model.to(args.device)
     z, logdet = model(x, [c_r, ])
