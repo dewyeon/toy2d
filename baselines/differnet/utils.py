@@ -3,8 +3,8 @@ import torch
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from torchvision.transforms.functional import rotate
-import config as c
-from multi_transform_loader import ImageFolderMultiTransform
+import baselines.differnet.config as c
+from baselines.differnet.multi_transform_loader import ImageFolderMultiTransform
 
 
 def get_random_transforms():

@@ -21,13 +21,15 @@ from models.affine import AffineFlow
 from models.nlsq import NLSqFlow
 from model import load_decoder_arch, positionalencoding2d, activation
 
-from utils.density_plotting import plot
+from utils.differnet_density_plotting import plot
 from utils.load_data import make_toy_density, make_toy_sampler
 from utils.utilities import init_log, softmax
 from optimization.optimizers import GradualWarmupScheduler
 from utils.distributions import log_normal_diag, log_normal_standard, log_normal_normalized
 from einops import rearrange 
 from our_utils import *
+from baselines.differnet.model import DifferNet
+import baselines.differnet.config as c
 
 def init_seeds(seed=0):
     random.seed(seed)
@@ -105,7 +107,7 @@ parser.add_argument("--max_grad_norm", type=float, default=10.0, help="Max norm 
 parser.add_argument("--warmup_iters", type=int, default=0, help="Use this number of iterations to warmup learning rate linearly from zero to learning rate")
 
 # flow parameters
-parser.add_argument('--flow', type=str, default='ours',
+parser.add_argument('--flow', type=str, default='differnet',
                     choices=['planar', 'radial', 'liniaf', 'affine', 'nlsq', 'boosted', 'iaf', 'realnvp'],
                     help="""Type of flows to use, no flows can also be selected""")
 parser.add_argument('--A', '-A', default='mat', type=str)
@@ -244,7 +246,7 @@ def parse_args(main_args=None):
 
     args.boosted = args.flow == "boosted"
     if args.flow != 'no_flow':
-        args.snap_dir += 'K' + str(args.K_steps)
+        args.snap_dir += 'cb' + str(c.n_coupling_blocks)
 
     if args.flow in ['boosted', 'bagged']:
         if args.regularization_rate < 0.0:
@@ -293,28 +295,8 @@ def parse_args(main_args=None):
 
 
 def init_model(args):
-    if args.flow == 'boosted':
-        if args.density_matching:
-            model = BoostedVAE(args).to(args.device)
-        else:
-            model = BoostedFlow(args).to(args.device)
-    elif args.flow == 'planar':
-        model = PlanarFlow(args).to(args.device)
-    elif args.flow == 'radial':
-        model = RadialFlow(args).to(args.device)
-    elif args.flow == 'liniaf':
-        model = LinIAFFlow(args).to(args.device)
-    elif args.flow == 'affine':
-        model = AffineFlow(args).to(args.device)
-    elif args.flow == 'nlsq':
-        model = NLSqFlow(args).to(args.device)
-    elif args.flow == 'iaf':
-        model = IAFFlow(args).to(args.device)
-    elif args.flow == "realnvp":
-        model = RealNVPFlow(args).to(args.device)
-    elif args.flow == 'ours':
-        args.clamp_alpha = 1.9
-        model = load_decoder_arch(args, 2)
+    if args.flow == 'differnet':
+        model = DifferNet()
     else:
         raise ValueError('Invalid flow choice')
 
@@ -485,23 +467,13 @@ def compute_kl_pq_loss(model, data_or_sampler, beta, args):
     else:
         x = data_or_sampler
     
-    x = rearrange(x, '(B H W) C -> B C H W', B=args.batch_size, H=1, W=1)
-    B, C, H, W = x.size()
-    P = args.condition_vec
-    pos = positionalencoding2d(P, H, W)
-    cond_list = []
-    for layer in range(args.L_layers):
-        res = torch.zeros(args.L_layers, H, W)
-        res[layer] = 1
-        cond = torch.cat((pos, res), dim=0).to(args.device).unsqueeze(0).repeat(B // args.L_layers, 1, 1, 1)
-        cond_list.append(cond)
-    #### L=2일때 수정해야함!!!!!!!!
-    c_r = rearrange(cond, 'b c h w -> (b h w) c')
-    x = rearrange(x, 'b c h w -> (b h w) c').to(args.device)
+    x = x.to(args.device)
+    x = rearrange(x, '(b h w) c -> b c h w', h=1,w=1)
     model = model.to(args.device)
-    z, logdet = model(x, [c_r, ])
-    q_log_prob = get_logp_z(z) / C
-    nll = -1.0 * (q_log_prob + logdet)
+    z = model(x)
+    logdet = model.nf.jacobian(run_forward=False)
+    nll = get_loss(z, logdet)
+    q_log_prob = ((-1) * nll * z.shape[1] - logdet) / z.shape[1]
     losses = {'nll': nll.mean(0), 'q': q_log_prob.mean().detach().item(), 'logdet': logdet.mean().detach().item()}
 
     return losses

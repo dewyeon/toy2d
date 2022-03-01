@@ -4,7 +4,7 @@ from torchvision.datasets import DatasetFolder
 from torchvision.datasets.folder import make_dataset, pil_loader, default_loader, IMG_EXTENSIONS
 from torchvision.transforms.functional import rotate
 
-import config as c
+import baselines.differnet.config as c
 
 
 def fixed_rotation(self, sample, degrees):
