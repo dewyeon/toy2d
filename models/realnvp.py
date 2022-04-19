@@ -99,7 +99,6 @@ class RealNVPFlow(GenerativeFlow):
             if z is None:
                 z_mu, z_var = self.prior(z, y_onehot)
                 z = torch.normal(z_mu, torch.exp(z_var) * temperature)
-
             log_det_j = 0.0
             Z = [None for i in range(self.num_flows + 1)]
             Z[-1] = z
@@ -110,7 +109,7 @@ class RealNVPFlow(GenerativeFlow):
                 Z[k-1] = z_k
                 log_det_j = log_det_j + ldj
 
-            return Z[0]
+            return Z[0], log_det_j
 
     def encode(self, x, y_onehot):
         log_det_j = 0.0
@@ -127,6 +126,7 @@ class RealNVPFlow(GenerativeFlow):
         return Z[-1], z_mu, z_var, log_det_j, y_logits
 
     def forward(self, x=None, y_onehot=None, z=None, temperature=None, reverse=False):
+        # import pdb; pdb.set_trace()
         if reverse:
             return self.decode(z, y_onehot, temperature)
         else:
