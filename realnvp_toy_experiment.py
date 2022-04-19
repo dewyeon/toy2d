@@ -1,11 +1,13 @@
 import argparse
 import datetime
+from tkinter import N
 import torch
 import numpy as np
 import math
 import random
 import os
 import logging
+import wandb
 import torch.optim as optim
 # from tensorboardX import SummaryWriter
 from collections import Counter
@@ -19,6 +21,7 @@ from models.radial import RadialFlow
 from models.liniaf import LinIAFFlow
 from models.affine import AffineFlow
 from models.nlsq import NLSqFlow
+from models.kde import GaussianKernel, KernelDensityEstimator
 
 from utils.realnvp_density_plotting import plot
 from utils.load_data import make_toy_density, make_toy_sampler
@@ -37,7 +40,7 @@ G_MAX_LOSS = -10.0
 parser = argparse.ArgumentParser(description='PyTorch Ensemble Normalizing flows')
 parser.add_argument('--experiment_name', type=str, default="toy",
                     help="A name to help identify the experiment being run when training this model.")
-parser.add_argument('--dataset', type=str, default='8gaussians', help='Dataset choice.', choices=TOY_DATASETS + ENERGY_FUNS)
+parser.add_argument('--dataset', type=str, default='1gaussian', help='Dataset choice.', choices=TOY_DATASETS + ENERGY_FUNS)
 parser.add_argument('--mog_sigma', type=float, default=1.5, help='Variance in location of mixture of gaussian data.',
                     choices=[i / 100.0 for i in range(50, 250)])
 parser.add_argument('--mog_clusters', type=int, default=6, help='Number of clusters to use in the mixture of gaussian data.',
@@ -49,7 +52,7 @@ parser.add_argument('--manual_seed', type=int, default=123,
 
 # gpu/cpu
 parser.add_argument('--gpu_id', type=int, default=0, metavar='GPU', help='choose GPU to run on.')
-parser.add_argument('--num_workers', type=int, default=1,
+parser.add_argument('--num_workers', type=int, default=32,
                     help='How many CPU cores to run on. Setting to 0 uses os.cpu_count() - 1.')
 parser.add_argument('--no_cuda', action='store_true', default=False, help='disables CUDA training')
 
@@ -115,6 +118,10 @@ parser.add_argument('--num_components', type=int, default=4,
 parser.add_argument('--component_type', type=str, default='affine', choices=['liniaf', 'affine', 'nlsq', 'realnvp'],
                     help='When flow is boosted -- what type of flow should each component implement.')
 
+parser.add_argument('--use_wandb', type=str, default='False')
+parser.add_argument('--norm_hyp', type=float, default=0.0001)
+parser.add_argument('--toy_exp_type', type=int, default=0) # base
+parser.add_argument('--sampling_num', type=int, default=256) # base
 
 
 def parse_args(main_args=None):
@@ -362,34 +369,11 @@ def compute_kl_qp_loss(model, target_fn, beta, args):
     """
     z0 = model.base_dist.sample((args.batch_size,))
     q_log_prob = model.base_dist.log_prob(z0).sum(1)
-    
-    if args.boosted:
-        if model.component < model.num_components:
-            density_from = '-c' if model.all_trained else '1:c-1'
-            sample_from = 'c'
-        else:
-            density_from = '1:c'
-            sample_from = '1:c'
-            
-        z_g, entropy_ldj, z_G, boosted_ldj = model.flow(z0, sample_from=sample_from, density_from=density_from)
-        p_log_prob = -1.0 * target_fn(z_g[-1]) * beta  # p = exp(-potential) => log_p = - potential
-        g_lhood = q_log_prob - entropy_ldj
-        
-        if model.component == 0 and model.all_trained == False:
-            G_lhood = torch.zeros_like(g_lhood)
-            nll = g_lhood - p_log_prob
-        else:
-            G_lhood = model.base_dist.log_prob(z_G[0]).sum(1) - boosted_ldj
-            G_lhood = torch.max(G_lhood, torch.ones_like(G_lhood) * G_MAX_LOSS)  # when g, G not overlapping award -10 (at most) to loss
-            nll = G_lhood - p_log_prob + g_lhood * args.regularization_rate
 
-        losses = {'nll': nll.mean(), 'g_nll': g_lhood.mean().item(), 'G_nll': G_lhood.mean().item(), 'p': p_log_prob.mean().item()}
-
-    else:
-        zk, logdet = model(z0)
-        p_log_prob = -1.0 * target_fn(zk) * beta  # p = exp(-potential) => log_p = - potential
-        nll = q_log_prob - logdet - p_log_prob
-        losses = {'nll': nll, 'q': q_log_prob.mean().item(), 'logdet': logdet.mean().item(), 'p': p_log_prob.mean().item()}
+    zk, logdet = model(z0)
+    p_log_prob = -1.0 * target_fn(zk) * beta  # p = exp(-potential) => log_p = - potential
+    nll = q_log_prob - logdet - p_log_prob
+    losses = {'nll': nll, 'q': q_log_prob.mean().item(), 'logdet': logdet.mean().item(), 'p': p_log_prob.mean().item()}
 
     return losses
 
@@ -400,105 +384,27 @@ def compute_kl_pq_loss(model, data_or_sampler, beta, args):
 
     Compute KL(p || q)
     """
+    # if callable(data_or_sampler):
+    #     x = data_or_sampler(args.batch_size).to(args.device)
+    # else:
+    #     x = data_or_sampler
+
+    # # x.shape [256,2]
+    # z, _, _, logdet, _ = model(x)
+    # q_log_prob = model.base_dist.log_prob(z).sum(1)
+    # nll = -1.0 * (q_log_prob + logdet)
+    # losses = {'nll': nll.mean(0), 'q': q_log_prob.mean().detach().item(), 'logdet': logdet.mean().detach().item()}
+
     if callable(data_or_sampler):
         x = data_or_sampler(args.batch_size).to(args.device)
     else:
         x = data_or_sampler
-    
-    if args.boosted:
-        if model.component > 0:
 
-            # 1. Compute likelihood/weight for each sample
-            additive = True  # recommended: True
-            G_ll = torch.zeros(x.size(0))
-            num_trained_components = args.num_components if model.all_trained else model.component
-            for c in range(num_trained_components):
-                if model.all_trained and c == model.component:
-                    continue
-                
-                rho_simplex = model.rho[0:c+1] / torch.sum(model.rho[0:c+1])
-                z_G, _, _, ldj_G, _ = model(x=x, components=c)
-
-                if additive:
-                    if c == 0:
-                        G_ll = model.base_dist.log_prob(z_G).sum(1) + ldj_G
-                    else:
-                        last_ll = torch.log(1.0 - rho_simplex[c]) + G_ll
-                        next_ll = torch.log(rho_simplex[c]) + (model.base_dist.log_prob(z_G).sum(1) + ldj_G)
-                        uG_ll = torch.cat([last_ll.view(x.size(0), 1), next_ll.view(x.size(0), 1)], dim=1)
-                        G_ll = torch.logsumexp(uG_ll, dim=1)
-                else:
-                    # multiplicative
-                    G_ll += rho_simplex[c] * (model.base_dist.log_prob(z_G).sum(1) + ldj_G)
-            
-            G_nll = -1.0 * G_ll
-
-            weight_samples = True  # recommended: True
-            if weight_samples:
-                # 2. Sample x with replacement, weighted by G_nll
-                if additive:
-                    weights = softmax(G_nll)
-                else:
-                    heuristic = "unity"
-                    if heuristic == "decay":
-                        beta = 1.0 / (2.0**model.component)
-                    elif heuristic == "uniform":
-                        beta = 1.0 / (1.0 + args.num_components)
-                    else:
-                        beta = 1.0  # unity
-                        
-                    uweights = G_nll * beta
-                    weights = torch.exp(uweights - torch.logsumexp(uweights, dim=0))  # normalize weights: large NLL => large weight
-                    
-                weights = weights / torch.sum(weights)
-                orig_weights = weights.data.clone()
-
-                max_wt = 0.1
-                if weights.max() > max_wt:
-                    weights = torch.max(torch.min(weights, torch.tensor([max_wt], device=args.device)), torch.tensor([0.1 / args.batch_size], device=args.device))
-                    weights = weights / torch.sum(weights)
-                    
-                reweighted_idx = torch.multinomial(weights, x.size(0), replacement=True)
-                x_resampled = x[reweighted_idx]
-
-                if np.random.rand() > 0.9:
-                    with open(os.path.join(args.snap_dir, 'counts.txt'), 'a') as ff:
-                        orig_weights.sort()
-                        top_wts1 = ', '.join([f"{w:1.3f}" for w in orig_weights[-5:]])
-                        weights.sort()
-                        top_wts2 = ', '.join([f"{w:1.3f}" for w in weights[-5:]])
-                        top_idx = ', '.join([str(ct) for _, ct in Counter(reweighted_idx.data.cpu().numpy()).most_common(10)])
-                        num_unique = torch.unique(reweighted_idx).size(0)
-                        print(f"C{model.component}. Unique samples={num_unique}, top ids={top_idx}, orig={top_wts1}, norm={top_wts2}", file=ff)
-
-                # 3. Compute g for resampled observations
-                z_g, _, _, ldj_g, _ = model(x=x_resampled, components="c")
-                g_nll = -1.0 * (model.base_dist.log_prob(z_g).sum(1) + ldj_g)
-                nll = torch.mean(g_nll)
-
-            else:
-                # Compute g in standard fashion
-                z_g, _, _, ldj_g, _ = model(x=x, components="c")
-                g_nll = -1.0 * (model.base_dist.log_prob(z_g).sum(1) + ldj_g)
-                nll =  torch.mean(g_nll / (torch.exp(G_ll) + 0.1))
-
-            losses = {"nll": nll}
-            losses["G_nll"] = torch.mean(G_nll)
-            losses["g_nll"] = torch.mean(g_nll)
-            
-        else:
-            # train first boosted component just like a non-boosted model
-            z_g, _, _, ldj_g, _ = model(x=x, components="c")
-            g_nll = -1.0 * (model.base_dist.log_prob(z_g).sum(1) + ldj_g)
-            losses = {"nll": torch.mean(g_nll)}
-            losses["g_nll"] = torch.mean(g_nll)
-            losses["G_nll"] = torch.zeros_like(losses['g_nll'])
-    
-    else:
-        z, _, _, logdet, _ = model(x)
-        q_log_prob = model.base_dist.log_prob(z).sum(1)
-        nll = -1.0 * (q_log_prob + logdet)
-        losses = {'nll': nll.mean(0), 'q': q_log_prob.mean().detach().item(), 'logdet': logdet.mean().detach().item()}
+    # x.shape [256,2]
+    z, _, _, logdet, _ = model(x)
+    q_log_prob = model.base_dist.log_prob(z).sum(1)
+    nll = -1.0 * (q_log_prob + logdet)
+    losses = {'nll': nll.mean(0), 'q': q_log_prob.mean().detach().item(), 'logdet': logdet.mean().detach().item()}
 
     return losses
 
@@ -616,15 +522,28 @@ def annealing_schedule(i, args):
     return rval
 
 
-def train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args):
-    if args.tensorboard:
-        writer = SummaryWriter(args.snap_dir)
+def train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, scheduler, args):
+    # if args.tensorboard:
+    #     writer = SummaryWriter(args.snap_dir)
 
     model.train()
 
-    if args.boosted:
-        model.component = 0
-        init_boosted_lr(model, optimizer, args)
+    # if args.boosted:
+    #     model.component = 0
+    #     init_boosted_lr(model, optimizer, args)
+    
+    ### KDE 적용하기 위해 커널 선언 ###
+    # kernel = KernelDensityEstimator().to(args.device)
+    
+    # import pdb; pdb.set_trace()
+    tgt_data = target_or_sample_fn(args.batch_size * 100).to(args.device) # kde로 측정할 우리가 정답아는 분포 (e.g, checkerboard)
+    kernel_estimator = KernelDensityEstimator(tgt_data).to(args.device)
+    
+    mean = torch.ones(2).to(args.device)
+    cov = torch.eye(2).to(args.device)
+    priorMVG_Z = torch.distributions.multivariate_normal.MultivariateNormal(loc=mean, covariance_matrix=cov)
+    
+    kl_loss = torch.nn.KLDivLoss(reduction='batchmean')
     
     for batch_id in range(args.num_steps+1):
         model.train()
@@ -635,31 +554,93 @@ def train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args):
             args.dataset = "u1"
             target_or_sample_fn = make_toy_density(args)
 
+        # Default Objective 1 
         losses = loss_fn(model, target_or_sample_fn, beta, args)
-        losses['nll'].backward()
+
+        # '''1. Sampling z from MVG and keep log_p_z'''
+        
+        
+        # z = model.base_dist.sample((args.batch_size,))
+        # log_p_z = model.base_dist.log_prob(z)
+    
+        # '''2. F^-1을 거쳐서 정답아는 toy data분포로'''
+        # sampled_x, log_det = model.decode(z, None, None)
+        
+        # '''3. Getting sampled_x's log probability'''
+        # # log_p_x = log_p_z - log_det
+        
+        # '''4. toy data분포 기준으로 sampled data KDE''' 
+        # kde_q = kernel_estimator(sampled_x) # In toy data density, estimate sampled_x
+        
+        '''1. Sampling z from MVG and keep log_p_z'''
+        z = priorMVG_Z.sample((args.sampling_num,)).to(args.device)
+        log_p_z = priorMVG_Z.log_prob(z) 
+    
+        '''2. F^-1을 거쳐서 정답아는 toy data분포로'''
+        sampled_x, log_det = model.decode(z, None, None)
+        
+        '''3. Getting sampled_x's log probability'''
+        log_p_x = log_p_z - log_det
+        density_x = torch.exp(log_p_x)
+        
+        '''4. toy data분포 기준으로 sampled data KDE''' 
+        kde_q = kernel_estimator(sampled_x) # In toy data density, estimate sampled_x
+        
+        diff_norm = torch.norm(density_x-kde_q)
+        losses['kl_loss'] = kl_loss(kde_q.log(), log_p_x)
+    
+        # import pdb; pdb.set_trace()
+        if args.toy_exp_type == 0:
+            losses['new_nll'] = losses['nll']
+        elif args.toy_exp_type == 1:
+            losses['new_nll'] = losses['nll'] + args.norm_hyp * diff_norm
+        elif args.toy_exp_type == 2:
+            losses['new_nll'] = losses['nll'] + args.norm_hyp * losses['kl_loss']
+        
+        
+        if args.use_wandb=='True':
+            results = {"kde_q": kde_q.mean(), "norm": diff_norm}
+            results.update(losses)
+            wandb.log(results)
+        # kde_dist = kernel(tgt_data, sampled_x) # kde로 우리가 정답아는 분포 측정
+        
+
+        ''''
+            z0 = model.base_dist.sample((args.batch_size,))
+            q_log_prob = model.base_dist.log_prob(z0).sum(1)
+
+            zk, logdet = model(z0)
+            p_log_prob = -1.0 * target_fn(zk) * beta  # p = exp(-potential) => log_p = - potential
+            nll = q_log_prob - logdet - p_log_prob
+            losses = {'nll': nll, 'q': q_log_prob.mean().item(), 'logdet': logdet.mean().item(), 'p': p_log_prob.mean().item()}
+        '''
+
+        # Surrogate Objective 2
+        # model.eval()
+        # surg_losses = surrogate_loss_fn(model, ?, beta, args)
+        # model.train()
+
+        # ToDo: Modifying this backward....
+        # losses['nll'].backward()
+        losses['new_nll'].backward()
 
         if args.max_grad_clip > 0:
             torch.nn.utils.clip_grad_value_(model.parameters(), args.max_grad_clip)
         if args.max_grad_norm > 0:
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-            if args.tensorboard:
-                writer.add_scalar("grad_norm/grad_norm", grad_norm, batch_id)
+            # if args.tensorboard:
+            #     writer.add_scalar("grad_norm/grad_norm", grad_norm, batch_id)
 
-        if args.boosted:  # freeze all but the new component being trained
-            if batch_id > 0:
-                for c in range(args.num_components):
-                    if c != model.component:
-                        optimizer.param_groups[c]['lr'] = 0.0
-        if args.tensorboard:
-            for i in range(len(optimizer.param_groups)):
-                writer.add_scalar(f'lr/lr_{i}', optimizer.param_groups[i]['lr'], batch_id)
+        # if args.tensorboard:
+        #     for i in range(len(optimizer.param_groups)):
+        #         writer.add_scalar(f'lr/lr_{i}', optimizer.param_groups[i]['lr'], batch_id)
 
         optimizer.step()
-        if not args.no_lr_schedule:
-            if args.lr_schedule == "plateau":
-                scheduler.step(metrics=losses['nll'])
-            else:
-                scheduler.step()
+        # if not args.no_lr_schedule:
+        #     if args.lr_schedule == "plateau":
+        #         scheduler.step(metrics=losses['nll'])
+        #     else:
+        #         scheduler.step()
 
         boosted_component_converged = args.boosted and batch_id % args.iters_per_component == 0 and batch_id > 0
         new_boosted_component = args.boosted and batch_id % args.iters_per_component == 1
@@ -685,11 +666,11 @@ def train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args):
                 writer.add_scalar('batch/q_log_prob', losses['q'], batch_id)
                 writer.add_scalar('batch/log_det_jacobian', losses['logdet'], batch_id)
 
-        if boosted_component_converged:
-            update_rho(model, target_or_sample_fn, writer, args)
-            model.increment_component()
-            optimizer, scheduler = init_optimizer(model, args, verbose=False)
-            init_boosted_lr(model, optimizer, args)
+        # if boosted_component_converged:
+        #     update_rho(model, target_or_sample_fn, writer, args)
+        #     model.increment_component()
+        #     optimizer, scheduler = init_optimizer(model, args, verbose=False)
+        #     init_boosted_lr(model, optimizer, args)
 
         if (batch_id > 0 and batch_id % args.plot_interval == 0) or boosted_component_converged:
             with torch.no_grad():
@@ -730,11 +711,25 @@ def main(main_args=None):
         loss_fn = compute_kl_qp_loss
     else:
         # target is density to estimate to sample from
+        # import pdb; pdb.set_trace()
+
         target_or_sample_fn = make_toy_sampler(args)
         loss_fn = compute_kl_pq_loss
+        surrogate_loss_fn = compute_kl_qp_loss
 
+    if args.use_wandb=='True':
+        if args.toy_exp_type == 0:
+            args.norm_hyp = 0
+            name = 'BaseLoss' + args.dataset
+        elif args.toy_exp_type == 1:
+            name = 'MLE+norm' + args.dataset + '_' + str(args.norm_hyp)
+        elif args.toy_exp_type == 2:
+            name = 'MLE+KL' + args.dataset + '_' + str(args.norm_hyp)
 
-    train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args)
+        wandb.init(project='RealNVP_toy', name=name)
+        wandb.config.update(args)
+        
+    train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, scheduler, args)
         
 
 if __name__ == "__main__":
