@@ -109,14 +109,14 @@ class GaussianKernel(Kernel):
 class KernelDensityEstimator(GenerativeModel):
     """The KernelDensityEstimator model."""
 
-    def __init__(self, train_Xs, kernel=None):
+    def __init__(self, train_Xs, bandwidth=0.05, kernel=None):
         """Initializes a new KernelDensityEstimator.
         Args:
             train_Xs: The "training" data to use when estimating probabilities.
             kernel: The kernel to place on each of the train_Xs.
         """
         super().__init__()
-        self.kernel = kernel or GaussianKernel()
+        self.kernel = kernel or GaussianKernel(bandwidth=bandwidth)
         self.train_Xs = train_Xs
 
     @property

@@ -289,9 +289,9 @@ def make_toy_sampler(args):
                 
             data = torch.from_numpy(np.array(data).reshape([batch_size,]))
     
-        elif args.dataset == "sanity_check":
-            mean = torch.zeros(2) + 2 # mean=2
-            cov = torch.eye(2) * 4 # covariance=4
+        elif args.dataset == "sanity_check" or args.dataset == 'sanity_check_kde':
+            mean = torch.zeros(2) + args.toy_mean # mean=2
+            cov = torch.eye(2) * args.toy_cov # covariance=4
             dist = torch.distributions.multivariate_normal.MultivariateNormal(loc=mean, covariance_matrix=cov)
             data = dist.sample([batch_size,])
         else:

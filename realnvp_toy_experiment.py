@@ -33,7 +33,7 @@ from utils.distributions import log_normal_diag, log_normal_standard, log_normal
 logger = logging.getLogger(__name__)
 
 
-TOY_DATASETS = ["sanity_check", "8gaussians", "2gaussians", "1gaussian",  "swissroll", "rings", "moons", "pinwheel", "cos", "2spirals", "checkerboard", "line", "circles", "joint_gaussian"]
+TOY_DATASETS = ["sanity_check", "sanity_check_kde", "8gaussians", "2gaussians", "1gaussian",  "swissroll", "rings", "moons", "pinwheel", "cos", "2spirals", "checkerboard", "line", "circles", "joint_gaussian"]
 ENERGY_FUNS = ['u0', 'u1', 'u2', 'u3', 'u4', 'u5', 'u6']
 G_MAX_LOSS = -10.0
 
@@ -121,7 +121,11 @@ parser.add_argument('--component_type', type=str, default='affine', choices=['li
 parser.add_argument('--use_wandb', type=str, default='False')
 parser.add_argument('--norm_hyp', type=float, default=0.0001)
 parser.add_argument('--toy_exp_type', type=int, default=0) # base
+parser.add_argument('--toy_mean', type=int, default=3) # base
+parser.add_argument('--toy_cov', type=int, default=9) # base
 parser.add_argument('--sampling_num', type=int, default=256) # base
+parser.add_argument('--kde_init', type=int, default=10) # base
+parser.add_argument('--kde_bandwidth', type=float, default=0.4) # base
 
 
 def parse_args(main_args=None):
@@ -529,15 +533,14 @@ def train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, sch
     # import pdb; pdb.set_trace()
     '''def make_toy_sampler = target_or_sample_fn'''
     # for sanity check, tat_data come from prior_X
+
     tgt_data = target_or_sample_fn(args.batch_size * 100).to(args.device) # kde로 측정할 우리가 정답아는 분포 (e.g, checkerboard)
-    kernel_estimator = KernelDensityEstimator(tgt_data).to(args.device)
+    kernel_estimator = KernelDensityEstimator(tgt_data, bandwidth=args.kde_bandwidth).to(args.device)
     
-    mean = torch.zeros(2).to(args.device) # mean=0
-    cov = torch.eye(2).to(args.device) # covariance=1
-    # priorMVG_Z = torch.distributions.multivariate_normal.MultivariateNormal(loc=mean, covariance_matrix=cov) # MVG ~ N(0,I)
-    
-    if args.dataset == 'sanity_check':
-        prior_X = torch.distributions.multivariate_normal.MultivariateNormal(loc=mean+2, covariance_matrix=cov*4) # mean=2, covariance=4
+    if args.dataset == 'sanity_check' or args.dataset == 'sanity_check_kde':
+        mean = torch.zeros(2).to(args.device) # mean=0
+        cov = torch.eye(2).to(args.device) # covariance=1
+        prior_X = torch.distributions.multivariate_normal.MultivariateNormal(loc=mean+args.toy_mean, covariance_matrix=cov*args.toy_cov) # mean=2, covariance=4
     
     kl_loss = torch.nn.KLDivLoss(reduction='batchmean')
     
@@ -549,6 +552,11 @@ def train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, sch
         if args.dataset == "u0" and batch_id == args.iters_per_component + 1:
             args.dataset = "u1"
             target_or_sample_fn = make_toy_density(args)
+
+        # if batch_id % args.kde_init == 0:
+        #     tgt_data = target_or_sample_fn(args.batch_size * 100).to(args.device) # kde로 측정할 우리가 정답아는 분포 (e.g, checkerboard)
+        #     kernel_estimator = KernelDensityEstimator(tgt_data, bandwidth=args.kde_bandwidth).to(args.device)
+
 
         # Default Objective 1 
         losses = loss_fn(model, target_or_sample_fn, beta, args)
@@ -569,12 +577,9 @@ def train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, sch
         # kde_q = kernel_estimator(sampled_x) # In toy data density, estimate sampled_x
         
         '''1. Sampling z from MVG and keep log_p_z'''
-        # z = priorMVG_Z.sample((args.sampling_num,)).to(args.device)
-        # log_p_z = priorMVG_Z.log_prob(z) 
         z = model.base_dist.sample((args.sampling_num,)).to(args.device)
         log_p_z = model.base_dist.log_prob(z) 
         
-    
         '''2. F^-1을 거쳐서 정답아는 toy data분포로'''
         sampled_x, log_det = model.decode(z, None, None)
         
@@ -588,15 +593,33 @@ def train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, sch
             diff_norm = torch.norm(log_p_x-kde_q)
             losses['kl_loss'] = kl_loss(kde_q, log_p_x.exp())
             
-                
             if (batch_id % 100) == 0:
-                # print("predicted log_p_x:", log_p_x[:6])
-                # print("real log_p_x:", kde_q[:6])                
                 print(log_p_x[:6])
                 print(kde_q[:6])
                 print("\n")
-                # import pdb; pdb.set_trace()
                 
+        elif args.dataset == 'sanity_check_kde':
+            real_q = prior_X.log_prob(sampled_x) # Estimate density in known toy distribution prior_X
+            kde_q = kernel_estimator(sampled_x) # Estimate denstiy in KDE
+            
+            diff_norm_real_kde = torch.norm(torch.exp(real_q) - kde_q) # Calculate kde's validity
+            diff_norm = torch.norm(density_x - kde_q)
+            
+            losses['kl_loss_real-kde'] = kl_loss(real_q, kde_q)
+            losses['kl_loss'] = kl_loss(kde_q.log(), log_p_x.exp())
+
+            if (batch_id % 10) == 0:
+                print(real_q[:6])
+                print(kde_q[:6].log())
+                print(log_p_x[:6])
+                    
+                print(losses['kl_loss_real-kde'])
+                print(losses['kl_loss'])
+                print(diff_norm_real_kde)
+                print(diff_norm)
+                print("\n")
+
+        
         else:
             kde_q = kernel_estimator(sampled_x) # In toy data density, estimate sampled_x
             diff_norm = torch.norm(density_x-kde_q)
@@ -611,8 +634,15 @@ def train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, sch
             losses['new_nll'] = losses['nll'] + args.norm_hyp * losses['kl_loss']
         
         
+        # log scale: log_p_x, real_q
+        # Not log scale: kde_q
+        
         if args.use_wandb=='True':
-            results = {"kde_q": kde_q.mean(), "norm": diff_norm, "log_p_x": log_p_x.mean()}
+            if args.dataset == 'sanity_check_kde':
+                results = {"kde_q": kde_q.log().mean(), "real_q": real_q.mean(), "log_p_x": log_p_x.mean(),
+                           "norm_real-kde": diff_norm_real_kde, "norm": diff_norm}
+            else:
+                results = {"kde_q": kde_q.mean(), "norm": diff_norm, "log_p_x": log_p_x.mean()}
             results.update(losses)
             wandb.log(results)
         # kde_dist = kernel(tgt_data, sampled_x) # kde로 우리가 정답아는 분포 측정
@@ -731,7 +761,7 @@ def main(main_args=None):
         surrogate_loss_fn = compute_kl_qp_loss
 
     if args.use_wandb=='True':
-        if args.dataset == 'sanity_check':
+        if args.dataset == 'sanity_check' or args.dataset == 'sanity_check_kde':
             if args.toy_exp_type == 0:
                 args.norm_hyp = 0
                 name = 'BaseLoss with SanityCheck' + args.dataset
@@ -739,7 +769,7 @@ def main(main_args=None):
                 name = 'MLE+norm with SanityCheck' + args.dataset + '_' + str(args.norm_hyp)
             elif args.toy_exp_type == 2:
                 name = 'MLE+KL with SanityCheck' + args.dataset + '_' + str(args.norm_hyp)
-            args.experiment_name = 'sanity_check'
+            args.experiment_name = args.dataset
         else:
             if args.toy_exp_type == 0:
                 args.norm_hyp = 0
