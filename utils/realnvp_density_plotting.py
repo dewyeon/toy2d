@@ -172,7 +172,8 @@ def plot_fwd_flow_density(model, ax, test_grid, n_pts, batch_size, args):
         logdet += [logdet_i]
         
     zzk, logdet = torch.cat(zzk, 0), torch.cat(logdet, 0)
-    q_log_prob = model.base_dist.log_prob(zzk).sum(1)
+    # q_log_prob = model.base_dist.log_prob(zzk).sum(1)
+    q_log_prob = model.base_dist.log_prob(zzk)
     log_prob = q_log_prob + logdet
     prob = log_prob.exp().cpu()
 
