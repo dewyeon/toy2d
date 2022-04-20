@@ -287,12 +287,13 @@ def make_toy_sampler(args):
             for (mix_props_i, mu_i, sigma_i) in zip(mix_props, mu, sigma):
                 data.extend(np.random.multivariate_normal(mu_i, sigma_i, size=[int(batch_size * mix_props_i)]))
                 
-            data = torch.from_numpy(np.array(data).reshape([batch_size, 2]))
+            data = torch.from_numpy(np.array(data).reshape([batch_size,]))
     
         elif args.dataset == "sanity_check":
-            x2 = torch.distributions.Normal(0., 0.).sample((batch_size, 1))
-            x1 = torch.distributions.Normal(0., 0.).sample((batch_size, 1))
-            data = torch.cat((x1, x2), 1)
+            mean = torch.zeros(2) + 2 # mean=2
+            cov = torch.eye(2) * 4 # covariance=4
+            dist = torch.distributions.multivariate_normal.MultivariateNormal(loc=mean, covariance_matrix=cov)
+            data = dist.sample([batch_size,])
         else:
             raise ValueError(f"The toy dataset {args.dataset} hasn't been defined!")
 

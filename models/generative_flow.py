@@ -38,8 +38,13 @@ class GenerativeFlow(nn.Module):
     @property
     def base_dist(self):
         #rval = D.MultivariateNormal(self.base_dist_mean, self.base_dist_var)
-        rval = D.Normal(self.base_dist_mean, self.base_dist_var)
-        return rval
+        # rval = D.Normal(self.base_dist_mean, self.base_dist_var)
+        
+        mean = torch.zeros(2).to(self.args.device) # mean=0
+        cov = torch.eye(2).to(self.args.device) # covariance=1
+        priorMVG_Z = torch.distributions.multivariate_normal.MultivariateNormal(loc=mean, covariance_matrix=cov) # MVG ~ N(0,I)
+
+        return priorMVG_Z
 
     def forward(self):
         raise NotImplementedError
