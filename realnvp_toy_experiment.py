@@ -565,7 +565,8 @@ def train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, sch
         
         losses['kl_mean_fg'] = kl_loss_mean_log(kde_q.log(), log_p_x)
         losses['kl_mean_gf'] = kl_loss_mean(log_p_x, kde_q)
-        
+        losses['kl_mean_minusf_g'] = kl_loss_mean_log(kde_q.log(), -1 * log_p_x)
+        losses['kl_mean_g_minusf'] = kl_loss_mean(-1 * log_p_x, kde_q)       
 
         ''' 6. Calculate norm between f and g '''
         density_x = torch.exp(log_p_x)
@@ -575,10 +576,24 @@ def train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, sch
 
         if args.toy_exp_type == 'default':
             losses['new_objective'] = losses['nll']     
-        elif args.toy_exp_type == 'KL(f|g)':
+        elif args.toy_exp_type == 'KL_fg':
             losses['new_objective'] = losses['nll'] + args.norm_hyp * losses['kl_mean_fg']
-        elif args.toy_exp_type == 'KL(g|f)':
+        elif args.toy_exp_type == 'KL_gf':
             losses['new_objective'] = losses['nll'] + args.norm_hyp * losses['kl_mean_gf']
+            
+        elif args.toy_exp_type == 'KL_-fg':
+            losses['new_objective'] = losses['nll'] + args.norm_hyp * losses['kl_mean_minusf_g']
+        elif args.toy_exp_type == 'KL_g-f':
+            losses['new_objective'] = losses['nll'] + args.norm_hyp * losses['kl_mean_g_minusf']
+            
+        elif args.toy_exp_type == 'absKL_fg':
+            losses['new_objective'] = losses['nll'] + args.norm_hyp * torch.abs(losses['kl_mean_fg'])
+        elif args.toy_exp_type == 'absKL_gf':
+            losses['new_objective'] = losses['nll'] + args.norm_hyp * torch.abs(losses['kl_mean_gf'])
+        elif args.toy_exp_type == 'absKL_-fg':
+            losses['new_objective'] = losses['nll'] + args.norm_hyp * torch.abs(losses['kl_mean_minusf_g'])
+        elif args.toy_exp_type == 'absKL_g-f':
+            losses['new_objective'] = losses['nll'] + args.norm_hyp * torch.abs(losses['kl_mean_g_minusf'])
         else:
             print("Not Implemented")
             return
