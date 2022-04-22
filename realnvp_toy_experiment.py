@@ -589,7 +589,7 @@ def train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, sch
             print(density_x[:6]); print(kde_q[:6])
             print("KL(f|g): ", losses['kl_mean_fg']); print("KL(g|f): ", losses['kl_mean_gf'])
             print("norm_density: ", norm_density); print("norm_log_density: ", norm_log_density)
-
+            print("\n")
 
         if args.use_wandb=='True':
             results = {
