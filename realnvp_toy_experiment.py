@@ -563,7 +563,6 @@ def train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, sch
         # f(x) = log_p_x -> log density
         # g(x) = kde_q -> density
         
-        import pdb; pdb.set_trace()
         losses['kl_mean_fg'] = kl_loss_mean_log(kde_q.log(), log_p_x)
         losses['kl_mean_gf'] = kl_loss_mean(log_p_x, kde_q)
         
