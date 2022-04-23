@@ -1,5 +1,6 @@
 *pyc
 *.log
+run.py
 .ipynb_checkpoints/
 .idea/
 experiment_log.txt
