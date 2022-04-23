@@ -571,7 +571,7 @@ def train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, sch
         ''' 6. Calculate norm between f and g '''
         density_x = torch.exp(log_p_x)
         norm_density = torch.norm(density_x - kde_q) # l2 norm
-        norm_log_density = torch.norm(log_p_x - kde_q.log()) # l2 norm
+        # norm_log_density = torch.norm(log_p_x - kde_q.log()) # l2 norm
 
 
         if args.toy_exp_type == 'default':
@@ -600,16 +600,18 @@ def train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, sch
     
         losses['new_objective'].backward()
 
-        if (batch_id % 10) == 0:
+        if (batch_id % 100) == 0:
             print(density_x[:6]); print(kde_q[:6])
             print("KL(f|g): ", losses['kl_mean_fg']); print("KL(g|f): ", losses['kl_mean_gf'])
-            print("norm_density: ", norm_density); print("norm_log_density: ", norm_log_density)
+            print("norm_density: ", norm_density); 
+            # print("norm_log_density: ", norm_log_density)
             print("\n")
 
         if args.use_wandb=='True':
             results = {
                 "kde_q": kde_q.mean().item(), "log_p_x": log_p_x.mean().item(), "density_x": density_x.mean().item(),
-                "norm_density": norm_density, "norm_log_density": norm_log_density,
+                "norm_density": norm_density,
+                # "norm_log_density": norm_log_density,
             }
             results.update(losses)
             wandb.log(results)
