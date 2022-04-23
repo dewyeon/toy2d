@@ -400,7 +400,7 @@ def compute_kl_pq_loss(model, data_or_sampler, beta, args):
     nll = -1.0 * (q_log_prob + logdet)
     losses = {'nll': nll.mean(0), 'q': q_log_prob.mean().detach().item(), 'logdet': logdet.mean().detach().item()}
 
-    return losses
+    return losses, nll
 
 
 @torch.no_grad()
@@ -534,6 +534,8 @@ def train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, sch
     kl_loss_mean = torch.nn.KLDivLoss(reduction='batchmean').to(args.device)
     kl_loss_mean_log = torch.nn.KLDivLoss(reduction='batchmean', log_target=True).to(args.device)
     
+    kl_loss = torch.nn.KLDivLoss(reduction="none").to(args.device)
+
     for batch_id in range(args.num_steps+1):
         model.train()
         optimizer.zero_grad()
@@ -554,7 +556,7 @@ def train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, sch
         
         
         ''' 4. Calculate Objective 1 = -log p(x): losses['nll'] '''
-        losses = loss_fn(model, target_or_sample_fn, beta, args)
+        losses, element_nll = loss_fn(model, target_or_sample_fn, beta, args)
         
         
         ''' 5. Calculate Objective 2 = KL_divergence '''
@@ -567,6 +569,10 @@ def train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, sch
         losses['kl_mean_gf'] = kl_loss_mean(log_p_x, kde_q)
         losses['kl_mean_minusf_g'] = kl_loss_mean_log(kde_q.log(), -1 * log_p_x)
         losses['kl_mean_g_minusf'] = kl_loss_mean(-1 * log_p_x, kde_q)       
+        
+        losses['kl_gf_norm'] = torch.norm(kl_loss(log_p_x, kde_q))
+        losses['kl_g_minusf_norm'] = torch.norm(kl_loss(-1 * log_p_x, kde_q))
+
 
         ''' 6. Calculate norm between f and g '''
         density_x = torch.exp(log_p_x)
@@ -594,6 +600,13 @@ def train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, sch
             losses['new_objective'] = losses['nll'] + args.norm_hyp * torch.abs(losses['kl_mean_minusf_g'])
         elif args.toy_exp_type == 'absKL_g-f':
             losses['new_objective'] = losses['nll'] + args.norm_hyp * torch.abs(losses['kl_mean_g_minusf'])
+
+        elif args.toy_exp_type == 'KLeleNorm_gf':
+            losses['new_objective'] = losses['nll'] + args.norm_hyp * losses['kl_gf_norm']
+        elif args.toy_exp_type == 'KLeleNorm_g-f':
+            losses['new_objective'] = losses['nll'] + args.norm_hyp * losses['kl_g_minusf_norm']
+
+
         else:
             print("Not Implemented")
             return
@@ -603,6 +616,7 @@ def train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, sch
         if (batch_id % 100) == 0:
             print(density_x[:6]); print(kde_q[:6])
             print("KL(f|g): ", losses['kl_mean_fg']); print("KL(g|f): ", losses['kl_mean_gf'])
+            print("kl_gf_norm: ", losses['kl_gf_norm']); print("kl_g_minusf_norm: ", losses['kl_g_minusf_norm'])
             print("norm_density: ", norm_density); 
             # print("norm_log_density: ", norm_log_density)
             print("\n")
