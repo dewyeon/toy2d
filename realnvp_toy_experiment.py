@@ -573,6 +573,11 @@ def train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, sch
         losses['kl_gf_norm'] = torch.norm(kl_loss(log_p_x, kde_q))
         losses['kl_g_minusf_norm'] = torch.norm(kl_loss(-1 * log_p_x, kde_q))
 
+        # losses['qp_density_ratio'] = torch.norm((kde_q.log() - log_p_x)-1)
+        # losses['pq_density_ratio'] = torch.norm((log_p_x - kde_q.log())-1)
+
+        losses['qp_ratio'] = torch.norm((kde_q - log_p_x.exp())-1)
+        losses['pq_ratio'] = torch.norm((log_p_x.exp() - kde_q)-1)
 
         ''' 6. Calculate norm between f and g '''
         density_x = torch.exp(log_p_x)
@@ -607,6 +612,11 @@ def train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, sch
             losses['new_objective'] = losses['nll'] + args.norm_hyp * losses['kl_g_minusf_norm']
 
 
+        elif args.toy_exp_type == 'qp_ratio':
+            losses['new_objective'] = losses['nll'] + args.norm_hyp * losses['qp_ratio']
+        elif args.toy_exp_type == 'pq_ratio':
+            losses['new_objective'] = losses['nll'] + args.norm_hyp * losses['pq_ratio']     
+
         else:
             print("Not Implemented")
             return
@@ -618,6 +628,8 @@ def train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, sch
             print("KL(f|g): ", losses['kl_mean_fg']); print("KL(g|f): ", losses['kl_mean_gf'])
             print("kl_gf_norm: ", losses['kl_gf_norm']); print("kl_g_minusf_norm: ", losses['kl_g_minusf_norm'])
             print("norm_density: ", norm_density); 
+            # print("pq_density_ratio: ", losses['pq_density_ratio']); print("qp_density_ratio: ", losses['qp_density_ratio'])
+            print("pq_ratio: ", losses['pq_ratio']); print("qp_ratio: ", losses['qp_ratio'])
             # print("norm_log_density: ", norm_log_density)
             print("\n")
 
