@@ -579,6 +579,12 @@ def train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, sch
         losses['qp_ratio'] = torch.norm((kde_q - log_p_x.exp())-1)
         losses['pq_ratio'] = torch.norm((log_p_x.exp() - kde_q)-1)
 
+        M = 0.5 * (log_p_x.exp() + kde_q) # Calculate as the form of density
+        KL_PM = kl_loss_mean_log(M.log(), log_p_x)
+        KL_QM = kl_loss_mean_log(M.log(), kde_q.log())
+        losses['jsd'] = 0.5 * (KL_PM + KL_QM)
+
+
         ''' 6. Calculate norm between f and g '''
         density_x = torch.exp(log_p_x)
         norm_density = torch.norm(density_x - kde_q) # l2 norm
@@ -615,7 +621,11 @@ def train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, sch
         elif args.toy_exp_type == 'qp_ratio':
             losses['new_objective'] = losses['nll'] + args.norm_hyp * losses['qp_ratio']
         elif args.toy_exp_type == 'pq_ratio':
-            losses['new_objective'] = losses['nll'] + args.norm_hyp * losses['pq_ratio']     
+            losses['new_objective'] = losses['nll'] + args.norm_hyp * losses['pq_ratio']
+
+
+        elif args.toy_exp_type == 'jsd':   
+            losses['new_objective'] = losses['nll'] + args.norm_hyp * losses['jsd']
 
         else:
             print("Not Implemented")
@@ -631,6 +641,7 @@ def train(model, target_or_sample_fn, loss_fn, surrogate_loss_fn, optimizer, sch
             # print("pq_density_ratio: ", losses['pq_density_ratio']); print("qp_density_ratio: ", losses['qp_density_ratio'])
             print("pq_ratio: ", losses['pq_ratio']); print("qp_ratio: ", losses['qp_ratio'])
             # print("norm_log_density: ", norm_log_density)
+            print("M: ", M.mean()); print("KL_PM: ", KL_PM); print("KL_QM: ", KL_QM); print("JSD: ", losses['jsd'])
             print("\n")
 
         if args.use_wandb=='True':
